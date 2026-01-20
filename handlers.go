@@ -342,6 +342,7 @@ func runProxyArchive(ctx context.Context, bot *tele.Bot, chat tele.Recipient, ap
 	}
 	if err != nil {
 		app.LogError(err.Error(), "GetFile proxy")
+		_ = app.Sheets.LogToSheets(ctx, "Ошибка", "Ошибка загрузки: "+docName)
 		_, _ = bot.Send(chat, "Не удалось подготовить файл.")
 		return
 	}
@@ -349,6 +350,7 @@ func runProxyArchive(ctx context.Context, bot *tele.Bot, chat tele.Recipient, ap
 	zipPath, zipDir, err := ZipBytesToTemp(data, filename, sanitizeZipName(docName)+".zip")
 	if err != nil {
 		app.LogError(err.Error(), "ZipBytesToTemp")
+		_ = app.Sheets.LogToSheets(ctx, "Ошибка", "Ошибка загрузки: "+docName)
 		_, _ = bot.Send(chat, "Не удалось подготовить файл.")
 		return
 	}
@@ -363,6 +365,7 @@ func runProxyArchive(ctx context.Context, bot *tele.Bot, chat tele.Recipient, ap
 	msg, err := bot.Send(chat, doc)
 	if err != nil {
 		app.LogError(err.Error(), "Send document zip")
+		_ = app.Sheets.LogToSheets(ctx, "Ошибка", "Ошибка загрузки: "+docName)
 		_, _ = bot.Send(chat, "Не удалось подготовить файл.")
 		return
 	}
@@ -426,6 +429,7 @@ func runBulkDownload(ctx context.Context, bot *tele.Bot, chat tele.Recipient, ap
 	docs, err := app.Sheets.GetDocumentsByCategory(ctx, categoryID)
 	if err != nil {
 		app.LogError(err.Error(), "GetDocumentsByCategory bulk")
+		_ = app.Sheets.LogToSheets(ctx, "Ошибка", "Ошибка загрузки (bulk): GetDocumentsByCategory")
 		editStatus("Не удалось собрать архив.")
 		return
 	}
@@ -469,10 +473,12 @@ func runBulkDownload(ctx context.Context, bot *tele.Bot, chat tele.Recipient, ap
 	zipPath, bulkDir, err := BulkDownloadAndZip(ctx, app.Yandex, items, categoryName, telegramMaxBytes, minFreeBytes)
 	if err != nil {
 		if err == ErrArchiveTooLarge {
+			_ = app.Sheets.LogToSheets(ctx, "Ошибка", "Ошибка загрузки (bulk): превышен лимит 50 МБ")
 			editStatus("⚠️ Общий размер файлов превышает 50 МБ. Пожалуйста, скачайте файлы по отдельности.")
 			return
 		}
 		app.LogError(err.Error(), "BulkDownloadAndZip")
+		_ = app.Sheets.LogToSheets(ctx, "Ошибка", "Ошибка загрузки (bulk): BulkDownloadAndZip")
 		editStatus("Не удалось собрать архив.")
 		return
 	}
@@ -485,6 +491,7 @@ func runBulkDownload(ctx context.Context, bot *tele.Bot, chat tele.Recipient, ap
 	}
 	if _, err := bot.Send(chat, doc, tele.NoPreview); err != nil {
 		app.LogError(err.Error(), "BulkDownload Send")
+		_ = app.Sheets.LogToSheets(ctx, "Ошибка", "Ошибка загрузки (bulk): не удалось отправить архив")
 		editStatus("Не удалось отправить архив.")
 		return
 	}

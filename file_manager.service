@@ -1,0 +1,20 @@
+[Unit]
+Description=BuhChat Telegram Bot (file_manager)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/bugchat
+ExecStart=/opt/bugchat/app
+Restart=always
+RestartSec=5
+EnvironmentFile=/opt/bugchat/.env
+
+# Логи в journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=file_manager
+
+[Install]
+WantedBy=multi-user.target

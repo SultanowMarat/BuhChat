@@ -21,6 +21,7 @@ const (
 	sheetПользователи    = "Пользователи"
 	sheetАдмины          = "Админы"
 	sheetЛогиОшибок      = "Логи_Ошибок"
+	sheetЛогиСервера     = "Логи_Сервера"
 )
 
 // Заголовки листов: имя листа -> первая строка (колонки).
@@ -33,6 +34,7 @@ var sheetHeaders = map[string][]string{
 	sheetПользователи:    {"ID_Пользователя", "Юзернейм", "Дата_Регистрации"},
 	sheetАдмины:          {"Юзернейм", "ID_Чата"},
 	sheetЛогиОшибок:      {"Дата", "Ошибка", "Контекст"},
+	sheetЛогиСервера:     {"Дата", "Уровень", "Сообщение"},
 }
 
 // Ключи текста из "Настройки_Текста".
@@ -389,6 +391,16 @@ func (s *SheetsAPI) appendRow(ctx context.Context, sheet string, row []interface
 	_, err := s.svc.Spreadsheets.Values.Append(s.spreadsheetID, rangeStr, vr).
 		ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Context(ctx).Do()
 	return err
+}
+
+// LogToSheets добавляет запись в лист "Логи_Сервера" [Дата | Уровень | Сообщение].
+func (s *SheetsAPI) LogToSheets(ctx context.Context, level, message string) error {
+	row := []interface{}{
+		time.Now().Format("2006-01-02 15:04:05"),
+		level,
+		message,
+	}
+	return s.appendRow(ctx, sheetЛогиСервера, row)
 }
 
 // EnsureUser добавляет пользователя в "Пользователи", если его ещё нет.

@@ -6,6 +6,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -24,6 +25,26 @@ const (
 
 func main() {
 	_ = loadEnv()
+
+	// -log "сообщение" — запись в Логи_Сервера и выход (для deploy.sh)
+	for i := 1; i < len(os.Args)-1; i++ {
+		if os.Args[i] == "-log" {
+			cfg, err := LoadConfig()
+			if err != nil || cfg.SpreadsheetID == "" {
+				log.Fatal("Для -log нужны SPREADSHEET_ID и CREDENTIALS_PATH в .env")
+			}
+			ctx := context.Background()
+			api, err := NewSheetsAPI(ctx, cfg.SpreadsheetID, cfg.CredentialsPath)
+			if err != nil {
+				log.Fatalf("Sheets API: %v", err)
+			}
+			_ = api.EnsureSchema(ctx)
+			if err := api.LogToSheets(ctx, "Info", os.Args[i+1]); err != nil {
+				log.Fatalf("LogToSheets: %v", err)
+			}
+			os.Exit(0)
+		}
+	}
 
 	for _, a := range os.Args[1:] {
 		if a == "-fill-settings" {
@@ -89,7 +110,14 @@ func main() {
 	RegisterHandlers(bot, app)
 	go StartCleanupWorker()
 	log.Println("Бот запущен.")
-	bot.Start()
+	_ = sheetsAPI.LogToSheets(ctx, "Старт", "Бот запущен")
+
+	go bot.Start()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+	_ = sheetsAPI.LogToSheets(context.Background(), "Остановка", "Бот остановлен")
+	os.Exit(0)
 }
 
 // getFreeSpaceBytes возвращает свободное место в байтах для пути (например os.TempDir()).
