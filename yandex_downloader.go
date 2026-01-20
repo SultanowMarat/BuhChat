@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -143,6 +144,42 @@ func (y *YandexDownloader) getDirectViaCloudAPI(ctx context.Context, shareURL st
 		return ""
 	}
 	return strings.TrimSpace(out.Href)
+}
+
+// DownloadToFile скачивает файл по URL в destPath (потоково, io.Copy).
+// Для Яндекс.Диска — через GetDirectURL; для прочих — URL как есть.
+// Возвращает записанный размер. Если размер > maxSize — ErrFileTooLarge.
+func (y *YandexDownloader) DownloadToFile(ctx context.Context, shareURL, destPath string) (int64, error) {
+	directURL, err := y.GetDirectURL(ctx, shareURL)
+	if err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, directURL, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/119.0")
+	resp, err := y.client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusFound {
+		return 0, fmt.Errorf("GET %s: %d", directURL, resp.StatusCode)
+	}
+	f, err := os.Create(destPath)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	n, err := io.Copy(f, io.LimitReader(resp.Body, y.maxSize+1))
+	if err != nil {
+		return 0, err
+	}
+	if n > y.maxSize {
+		return 0, ErrFileTooLarge
+	}
+	return n, nil
 }
 
 // GetFile скачивает файл по публичной ссылке Яндекс.Диска.

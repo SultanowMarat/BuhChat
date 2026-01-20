@@ -9,7 +9,7 @@ import (
 // Config — конфигурация приложения из переменных окружения.
 type Config struct {
 	BotToken        string
-	BotUsername     string // без @, для deep-link t.me/BotUsername?start=dl_...
+	BotUsername     string // без @ (опционально)
 	SpreadsheetID   string
 	CredentialsPath string
 	CacheTTLMin     int

@@ -8,7 +8,7 @@ Telegram-бот на **Go** для выдачи документов по кат
 
 | Функция | Описание |
 |--------|----------|
-| **Документы по категориям** | Категории → список документов (название, описание). Ссылка «Скачать файл напрямую» ведёт на deep-link `t.me/BOT?start=dl_XXX`. |
+| **Документы по категориям** | Категории → список документов (название, описание). Под каждым документом со ссылкой — кнопка «Скачать файл» (callback); внизу [Скачать все] и [« Назад]. Гиперссылки в тексте не используются. |
 | **Прокси-архивация** | По нажатию «Скачать»: при наличии сохранённого `File_ID` — мгновенная отправка; иначе — скачивание с Яндекса, упаковка в ZIP, отправка и сохранение `File_ID` в таблицу. Прямые ссылки на Яндекс.Диск пользователю не показываются. |
 | **Пожелания** | Пользователь вводит текст → запись в лист «Пожелания» + уведомление всем админам с заполненным `ID_Чата`. |
 | **Заявки IMO** | Анкета из 4 полей (ФИО, Телефон, Должность, Источник) → лист «Заявки_IMO» + уведомление админам. |
@@ -36,7 +36,7 @@ go mod tidy
 ### 1. BotFather
 
 1. [@BotFather](https://t.me/BotFather) → `/newbot` → имя и username.
-2. Сохрани **токен** и **username** (без `@`) — нужен для deep-link и ссылок «Скачать файл напрямую».
+2. Сохрани **токен** и **username** (без `@`).
 
 ### 2. Google Cloud
 
@@ -53,7 +53,7 @@ ID таблицы: из URL `https://docs.google.com/spreadsheets/d/SPREADSHEET_
 | Переменная | Описание |
 |------------|----------|
 | `BOT_TOKEN` | Токен от BotFather |
-| `BOT_USERNAME` | Юзернейм бота без `@` (для `t.me/BOT_USERNAME?start=dl_...`) |
+| `BOT_USERNAME` | Юзернейм бота без `@` (опционально; в сообщениях ссылки t.me не выводятся) |
 | `SPREADSHEET_ID` | ID Google Таблицы |
 | `CREDENTIALS_PATH` | Путь к JSON ключу (по умолчанию `credentials.json`) |
 | `CACHE_TTL_MIN` | TTL кэша в минутах (по умолчанию 5) |
@@ -111,8 +111,8 @@ go run . -fill-test-data
 
 ## Логика документов и скачивания
 
-1. **Список документов** — inline-кнопки категорий → по выбору категории: один блок на документ (название, описание, ссылка «Скачать файл напрямую»). Ссылка: `https://t.me/BOT_USERNAME?start=dl_{base64(categoryID|idx)}`. Кнопка «« Назад к категориям». `DisableWebPagePreview`.
-2. **По нажатию / переходу по deep-link `dl_XXX`:**
+1. **Список документов** — inline-кнопки категорий → по выбору категории: один блок на документ (название, описание), под каждым документом со ссылкой — кнопка «Скачать файл» (callback `doc|categoryID|idx`); внизу один ряд [Скачать все] и [« Назад]. `DisableWebPagePreview`. Гиперссылки в тексте не используются. Нажатие любой inline-кнопки (категория, «Скачать файл», «Скачать все», « Назад) сбрасывает FSM.
+2. **По нажатию «Скачать файл» или по старым deep-link `/start dl_XXX`:**
    - Сообщение «⏳ Подготавливаю файл...» → удаляется после отправки.
    - Если в «Документы» есть **File_ID** — сразу отправка документа по `file_id`.
    - Иначе:
@@ -146,7 +146,8 @@ go run . -fill-test-data
 | `main.go` | Точка входа, загрузка `.env`, `EnsureSchema`, кэш (тексты, категории, админы), FSM, `getFreeSpaceBytes`, `StartCleanupWorker`, `-fill-settings` / `-fill-test-data`. |
 | `handlers.go` | `/start` (в т.ч. deep-link `dl_`), главное меню, категории и документы, `runProxyArchive`, `handleDeepLink`, `notifyAdmins`, FSM пожелания/IMO, `onSend`, `onReload`, `SetMyCommands` по `CommandScopeChat`. |
 | `sheets_api.go` | Sheets API: `EnsureSheets`, `EnsureSchema`, `ensureSheetColumns`, чтение/запись листов, `GetCategories` (с автоподстановкой UUID), `GetDocumentsByCategory` (A–E, `File_ID`, `SheetRow`), `UpdateDocumentFileID`, `GetAdmins` / `GetAdminChatIDs`, `SetAdminChatID`, `GetAllUserChatIDs`, `AppendWish` / `AppendIMO`, `EnsureUser`, `LogError`. |
-| `yandex_downloader.go` | `GetDirectURL` (HTML + Cloud API), `GetFile`, `GetFileSize`; лимит `maxSize`, `ErrNotYandexDisk`, `ErrFileTooLarge`. |
+| `yandex_downloader.go` | `GetDirectURL` (HTML + Cloud API), `GetFile`, `GetFileSize`, `DownloadToFile`; лимит `maxSize`, `ErrNotYandexDisk`, `ErrFileTooLarge`. |
+| `downloader.go` | `ZipBytesToTemp`, `BulkDownloadAndZip`, `ErrArchiveTooLarge`; сборка ZIP, проверка места, лимит 50 МБ. |
 | `config.go` | `LoadConfig`: `BOT_TOKEN`, `BOT_USERNAME`, `SPREADSHEET_ID`, `CREDENTIALS_PATH`, `CACHE_TTL_MIN`, `YANDEX_MAX_MB`. |
 | `env.example` | Пример переменных для `.env`. |
 | `settings_text.example.csv` | Пример пар «Ключ» / «Текст» для «Настройки_Текста». |
@@ -161,7 +162,7 @@ go run . -fill-test-data
 |----------|----------|
 | `/start` | Приветствие, кнопки: «Список документов», «Пожелания», «Запросить доступ в IMO». |
 | «Список документов» | Inline-кнопки категорий. |
-| Выбор категории | Документы (название, описание, «Скачать файл напрямую»), «« Назад к категориям». |
+| Выбор категории | Документы (название, описание), под каждым — «Скачать файл»; внизу [Скачать все] и [« Назад]. |
 | «Скачать» (Яндекс) | «⏳ Подготавливаю...» → ZIP или, при ошибке/лимите, ссылка. Повторное нажатие — по `File_ID` без повторной загрузки. |
 | «Скачать» (не Яндекс) | Ссылка текстом. |
 | «Пожелания» | Ввод текста → «Спасибо!»; запись в «Пожелания»; уведомление админам. |

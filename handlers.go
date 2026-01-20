@@ -1,13 +1,12 @@
 package main
 
 import (
-	"archive/zip"
 	"context"
 	"encoding/base64"
 	"fmt"
 	"html"
-	"io"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -54,8 +53,12 @@ func RegisterHandlers(b *tele.Bot, app *App) {
 	})
 
 	// /start — deep-link dl_XXX для скачивания или приветствие.
+	// Удаляем сообщение /start из чата, чтобы в истории не оставалось /start dl_UUID.
 	b.Handle("/start", func(c tele.Context) error {
 		payload := strings.TrimSpace(strings.TrimPrefix(c.Text(), "/start"))
+		if c.Message() != nil {
+			_ = c.Bot().Delete(c.Message())
+		}
 		if strings.HasPrefix(payload, "dl_") {
 			handleDeepLink(c, app)
 			return nil
@@ -132,12 +135,19 @@ func RegisterHandlers(b *tele.Bot, app *App) {
 			return nil
 		}
 		if data == "back_cats" {
+			_ = c.Respond(&tele.CallbackResponse{})
 			app.ResetState(c.Sender().ID)
 			return onListDocs(c, app, nil)
 		}
 		if strings.HasPrefix(data, "cat|") {
 			app.ResetState(c.Sender().ID)
 			return onCategorySelect(c, app, strings.TrimPrefix(data, "cat|"))
+		}
+		if strings.HasPrefix(data, "dl_all|") {
+			_ = c.Respond(&tele.CallbackResponse{})
+			app.ResetState(c.Sender().ID)
+			handleDlAll(c, app, strings.TrimPrefix(data, "dl_all|"))
+			return nil
 		}
 		return nil
 	})
@@ -178,10 +188,10 @@ func onListDocs(c tele.Context, app *App, editMsg *tele.Message) error {
 	}
 	if len(cats) == 0 {
 		if editMsg != nil {
-			_, _ = c.Bot().Edit(editMsg, desc+"\n\nКатегории пока не добавлены.")
+			_, _ = c.Bot().Edit(editMsg, desc+"\n\nКатегории пока не добавлены.", tele.NoPreview)
 			return nil
 		}
-		return c.Send(desc + "\n\nКатегории пока не добавлены.")
+		return c.Send(desc+"\n\nКатегории пока не добавлены.", tele.NoPreview)
 	}
 	m := &tele.ReplyMarkup{}
 	var rows []tele.Row
@@ -190,27 +200,38 @@ func onListDocs(c tele.Context, app *App, editMsg *tele.Message) error {
 	}
 	m.Inline(rows...)
 	if editMsg != nil {
-		_, err := c.Bot().Edit(editMsg, desc, m, tele.ModeHTML)
+		_, err := c.Bot().Edit(editMsg, desc, m, tele.ModeHTML, tele.NoPreview)
 		if err != nil {
-			return c.Send(desc, m)
+			return c.Send(desc, m, tele.NoPreview)
 		}
 		return nil
 	}
-	return c.Send(desc, m)
+	return c.Send(desc, m, tele.NoPreview)
 }
 
 func onCategorySelect(c tele.Context, app *App, categoryID string) error {
+	_ = c.Respond(&tele.CallbackResponse{})
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	docs, err := app.Sheets.GetDocumentsByCategory(ctx, categoryID)
 	if err != nil {
 		app.LogError(err.Error(), "GetDocumentsByCategory")
-		return c.Respond(&tele.CallbackResponse{Text: "Ошибка загрузки"})
+		if c.Message() != nil {
+			_, _ = c.Bot().Edit(c.Message(), "Ошибка загрузки", tele.NoPreview)
+		} else {
+			_, _ = c.Bot().Send(c.Chat(), "Ошибка загрузки", tele.NoPreview)
+		}
+		return nil
 	}
-	_ = c.Respond(&tele.CallbackResponse{})
-
 	if len(docs) == 0 {
-		return c.Send("В этой категории пока нет документов.")
+		m := &tele.ReplyMarkup{}
+		m.Inline(m.Row(m.Data("« Назад", "back_cats")))
+		if c.Message() != nil {
+			_, _ = c.Bot().Edit(c.Message(), "В этой категории пока нет документов.", m, tele.NoPreview)
+		} else {
+			_, _ = c.Bot().Send(c.Chat(), "В этой категории пока нет документов.", m, tele.NoPreview)
+		}
+		return nil
 	}
 
 	desc := app.GetText(keyОписаниеДокументы)
@@ -219,21 +240,33 @@ func onCategorySelect(c tele.Context, app *App, categoryID string) error {
 		text = desc + "\n\n"
 	}
 
-	botUsername := app.Cfg.BotUsername
+	botUsername := strings.TrimSpace(strings.TrimPrefix(app.Cfg.BotUsername, "@"))
 	var blocks []string
 	for idx, d := range docs {
 		block := "Название: <b>" + html.EscapeString(d.Название) + "</b>\n\n"
-		block += "Описание: <i>" + html.EscapeString(d.Описание) + "</i>\n\n"
-		if strings.TrimSpace(d.Ссылка) != "" && botUsername != "" {
+		block += "Описание: <i>" + html.EscapeString(d.Описание) + "</i>"
+		if link := strings.TrimSpace(d.Ссылка); link != "" && botUsername != "" {
 			payload := base64.URLEncoding.EncodeToString([]byte(categoryID + "|" + strconv.Itoa(idx)))
-			block += `<a href="https://t.me/` + html.EscapeString(botUsername) + `?start=dl_` + payload + `">Скачать файл напрямую</a>`
+			block += "\n\n<a href=\"https://t.me/" + html.EscapeString(botUsername) + "?start=dl_" + html.EscapeString(payload) + "\">Скачать файл</a>"
 		}
 		blocks = append(blocks, block)
 	}
 	text += strings.Join(blocks, "\n\n")
 
+	hasLink := false
+	for _, d := range docs {
+		if strings.TrimSpace(d.Ссылка) != "" {
+			hasLink = true
+			break
+		}
+	}
 	markup := &tele.ReplyMarkup{}
-	markup.Inline(markup.Row(markup.Data("« Назад к категориям", "back_cats")))
+	btnBack := markup.Data("« Назад", "back_cats")
+	if hasLink {
+		markup.Inline(markup.Row(markup.Data("Скачать все", "dl_all|"+categoryID), btnBack))
+	} else {
+		markup.Inline(markup.Row(btnBack))
+	}
 
 	opts := []interface{}{markup, tele.ModeHTML, tele.NoPreview}
 	if c.Message() != nil {
@@ -313,55 +346,13 @@ func runProxyArchive(ctx context.Context, bot *tele.Bot, chat tele.Recipient, ap
 		return
 	}
 
-	tmp, err := os.CreateTemp("", "bugchat-dl-*")
+	zipPath, zipDir, err := ZipBytesToTemp(data, filename, sanitizeZipName(docName)+".zip")
 	if err != nil {
-		app.LogError(err.Error(), "CreateTemp dl")
+		app.LogError(err.Error(), "ZipBytesToTemp")
 		_, _ = bot.Send(chat, "Не удалось подготовить файл.")
 		return
 	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		app.LogError(err.Error(), "Write temp")
-		_, _ = bot.Send(chat, "Не удалось подготовить файл.")
-		return
-	}
-	_ = tmp.Close()
-
-	zipTmp, err := os.CreateTemp("", "bugchat-zip-*.zip")
-	if err != nil {
-		app.LogError(err.Error(), "CreateTemp zip")
-		_, _ = bot.Send(chat, "Не удалось подготовить файл.")
-		return
-	}
-	zipPath := zipTmp.Name()
-	defer func() { _ = os.Remove(zipPath) }()
-
-	zw := zip.NewWriter(zipTmp)
-	innerName := filepath.Base(filename)
-	if innerName == "" || innerName == "." {
-		innerName = docName
-	}
-	fh := &zip.FileHeader{Name: innerName, Method: zip.Deflate}
-	w, err := zw.CreateHeader(fh)
-	if err != nil {
-		_ = zw.Close()
-		_ = zipTmp.Close()
-		_, _ = bot.Send(chat, "Не удалось подготовить файл.")
-		return
-	}
-	rf, err := os.Open(tmpPath)
-	if err != nil {
-		_ = zw.Close()
-		_ = zipTmp.Close()
-		_, _ = bot.Send(chat, "Не удалось подготовить файл.")
-		return
-	}
-	_, _ = io.Copy(w, rf)
-	_ = rf.Close()
-	_ = zw.Close()
-	_ = zipTmp.Close()
+	defer os.RemoveAll(zipDir)
 
 	zipFileName := sanitizeZipName(docName) + ".zip"
 	doc := &tele.Document{
@@ -412,6 +403,92 @@ func handleDeepLink(c tele.Context, app *App) {
 		defer cancel()
 		runProxyArchive(ctx, c.Bot(), c.Chat(), app, categoryID, idx, statusMsg)
 	}()
+}
+
+func handleDlAll(c tele.Context, app *App, categoryID string) {
+	statusMsg := c.Message()
+	if statusMsg != nil {
+		_, _ = c.Bot().Edit(statusMsg, "⏳ Начинаю сборку архива...", tele.NoPreview)
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		runBulkDownload(ctx, c.Bot(), c.Chat(), app, categoryID, statusMsg)
+	}()
+}
+
+func runBulkDownload(ctx context.Context, bot *tele.Bot, chat tele.Recipient, app *App, categoryID string, statusMsg *tele.Message) {
+	editStatus := func(text string) {
+		if statusMsg != nil {
+			_, _ = bot.Edit(statusMsg, text, tele.NoPreview)
+		}
+	}
+	docs, err := app.Sheets.GetDocumentsByCategory(ctx, categoryID)
+	if err != nil {
+		app.LogError(err.Error(), "GetDocumentsByCategory bulk")
+		editStatus("Не удалось собрать архив.")
+		return
+	}
+	var items []BulkItem
+	for _, d := range docs {
+		link := strings.TrimSpace(d.Ссылка)
+		if link == "" {
+			continue
+		}
+		name := sanitizeZipName(d.Название)
+		if name == "" {
+			name = "document"
+		}
+		if !strings.Contains(filepath.Base(name), ".") {
+			if u, e := url.Parse(link); e == nil && u != nil {
+				ext := filepath.Ext(u.Path)
+				if ext != "" {
+					name = name + ext
+				}
+			}
+		}
+		items = append(items, BulkItem{URL: link, Filename: name})
+	}
+	if len(items) == 0 {
+		editStatus("В категории нет файлов для скачивания.")
+		return
+	}
+	var categoryName string
+	if cats, _ := app.GetCategories(); cats != nil {
+		for _, cat := range cats {
+			if cat.ID == categoryID {
+				categoryName = cat.Name
+				break
+			}
+		}
+	}
+	if categoryName == "" {
+		categoryName = "Archive"
+	}
+
+	zipPath, bulkDir, err := BulkDownloadAndZip(ctx, app.Yandex, items, categoryName, telegramMaxBytes, minFreeBytes)
+	if err != nil {
+		if err == ErrArchiveTooLarge {
+			editStatus("⚠️ Общий размер файлов превышает 50 МБ. Пожалуйста, скачайте файлы по отдельности.")
+			return
+		}
+		app.LogError(err.Error(), "BulkDownloadAndZip")
+		editStatus("Не удалось собрать архив.")
+		return
+	}
+	defer os.RemoveAll(bulkDir)
+
+	doc := &tele.Document{
+		File:     tele.FromDisk(zipPath),
+		FileName: filepath.Base(zipPath),
+		Caption:  "Архив: " + categoryName,
+	}
+	if _, err := bot.Send(chat, doc, tele.NoPreview); err != nil {
+		app.LogError(err.Error(), "BulkDownload Send")
+		editStatus("Не удалось отправить архив.")
+		return
+	}
+	editStatus("📦 Архив собран и отправлен ниже.")
 }
 
 func sanitizeZipName(s string) string {

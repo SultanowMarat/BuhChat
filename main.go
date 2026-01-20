@@ -105,7 +105,7 @@ func getFreeSpaceBytes(path string) (uint64, error) {
 	return st.Bavail * uint64(st.Bsize), nil
 }
 
-// StartCleanupWorker раз в час удаляет в папке временных файлов bugchat-* старше 30 минут.
+// StartCleanupWorker раз в час удаляет bugchat-*, каталоги bulk_* и single_* старше 30 минут.
 func StartCleanupWorker() {
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
@@ -117,10 +117,20 @@ func StartCleanupWorker() {
 		}
 		now := time.Now()
 		for _, e := range entries {
+			name := e.Name()
+			path := filepath.Join(dir, name)
 			if e.IsDir() {
+				if strings.HasPrefix(name, "bulk_") || strings.HasPrefix(name, "single_") {
+					info, err := e.Info()
+					if err != nil {
+						continue
+					}
+					if now.Sub(info.ModTime()) >= cleanupMaxAge {
+						_ = os.RemoveAll(path)
+					}
+				}
 				continue
 			}
-			name := e.Name()
 			if !strings.HasPrefix(name, "bugchat-") {
 				continue
 			}
@@ -131,7 +141,7 @@ func StartCleanupWorker() {
 			if now.Sub(info.ModTime()) < cleanupMaxAge {
 				continue
 			}
-			_ = os.Remove(filepath.Join(dir, name))
+			_ = os.Remove(path)
 		}
 	}
 }
