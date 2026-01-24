@@ -68,8 +68,12 @@ func main() {
 		log.Fatalf("Sheets API: %v", err)
 	}
 
-	if err := sheetsAPI.EnsureSchema(ctx); err != nil {
-		log.Fatalf("EnsureSchema: %v", err)
+	// EnsureSchema с retry и таймаутом (сеть может быть нестабильна)
+	ensureCtx, ensureCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer ensureCancel()
+	if err := sheetsAPI.EnsureSchema(ensureCtx); err != nil {
+		log.Printf("WARNING: EnsureSchema failed (будет повтор при следующем запросе): %v", err)
+		// Не падаем, бот может работать без EnsureSchema (если схема уже создана)
 	}
 
 	cache := newCache(sheetsAPI, cfg.CacheTTLMin)
@@ -112,7 +116,10 @@ func main() {
 	log.Println("Бот запущен.")
 	_ = sheetsAPI.LogToSheets(ctx, "Старт", "Бот запущен")
 
+	// Запуск бота в горутине
 	go bot.Start()
+
+	// Ожидание сигнала остановки
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
